@@ -1,31 +1,41 @@
 import os
+import re
 import json
-import frontmatter
 import requests
+import nltk
+from nltk.corpus import stopwords
 
 # -----------------------------
-# 1️⃣ CONFIG
+# 1️⃣ NLTK setup
 # -----------------------------
-NOTES_FOLDER = "/Users/farhan/Documents/Vault/a. Raw Notes/Apple Notes/iCloud"  # <-- replace with your folder path
+try:
+    STOPWORDS = set(stopwords.words("english"))
+except LookupError:
+    nltk.download('stopwords')
+    STOPWORDS = set(stopwords.words("english"))
+
+# -----------------------------
+# 2️⃣ CONFIG
+# -----------------------------
+NOTES_FOLDER = "/Users/farhan/Documents/Vault/a. Raw Notes/Apple Notes/iCloud"  # <-- set your exported Apple Notes folder
 LMSTUDIO_API = "http://localhost:1234/v1/chat/completions"
 MODEL_NAME = "Phi-3-mini-4k-instruct.Q4_K_M"
-MAX_TAGS = 5  # max number of tags to generate
+MAX_TAGS = 5  # limit tags per note
 
 # -----------------------------
-# 2️⃣ FUNCTIONS
+# 3️⃣ FUNCTIONS
 # -----------------------------
-def get_tags_from_summary(summary_text):
-    """
-    Sends the note's summary to Phi 3 Mini to get 1-5 niche, linkable tags in Obsidian [[tag]] format.
-    """
+def get_tags(note_text):
     prompt = f"""
-You are an assistant analyzing a note's summary.  
-Suggest **1–5 highly niche, linkable tags** based ONLY on this summary.  
-Return them in **Obsidian [[tag]] format**, separated by spaces.  
-Do not include anything else.  
+You are an assistant analyzing a markdown note.
+Suggest up to {MAX_TAGS} relevant tags for this note content.
+Return only a JSON array of tags.
 
-Summary:
-{summary_text}
+Note content:
+{note_text}
+
+Example JSON output:
+["Tag1", "Tag2", "Tag3"]
 """
     payload = {
         "model": MODEL_NAME,
@@ -36,50 +46,40 @@ Summary:
     response = requests.post(LMSTUDIO_API, json=payload)
     response.raise_for_status()
     data = response.json()
-    text = data["choices"][0]["message"]["content"].strip()
+    text = data["choices"][0]["message"]["content"]
 
-    # Ensure at most MAX_TAGS
-    tags = text.split()
-    return tags[:MAX_TAGS]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        print("Warning: Could not parse JSON from LLM. Using fallback empty tags.")
+        return []
 
+def find_all_md_files(root_folder):
+    md_files = []
+    for dirpath, _, filenames in os.walk(root_folder):
+        for f in filenames:
+            if f.endswith(".md"):
+                md_files.append(os.path.join(dirpath, f))
+    return md_files
 
 # -----------------------------
-# 3️⃣ PROCESS NOTES
+# 4️⃣ PROCESS NOTES
 # -----------------------------
 def process_notes():
-    files = [f for f in os.listdir(NOTES_FOLDER) if f.endswith(".md")]
+    files = find_all_md_files(NOTES_FOLDER)
 
     for f in files:
-        path = os.path.join(NOTES_FOLDER, f)
-        post = frontmatter.load(path)
-        title = post.metadata.get("title", os.path.splitext(f)[0])
-        summary = post.metadata.get("summary", "")
+        with open(f, "r", encoding="utf-8") as file:
+            content = file.read()
 
-        if not summary:
-            print(f"Skipping {f}: no summary found")
-            continue
-
-        # Generate tags from summary
-        tags = get_tags_from_summary(summary)
-
-        # Rewrite the note: insert after title
-        content_lines = post.content.splitlines()
-        if content_lines:
-            content_lines.insert(1, f"tag: {' '.join(tags)}")
-        else:
-            content_lines = [f"tag: {' '.join(tags)}"]
-
-        post.content = "\n".join(content_lines)
-
-        # Save the note back
-        with open(path, "w", encoding="utf-8") as out_f:
-            out_f.write(frontmatter.dumps(post))
-
-        print(f"Updated tags for: {f} -> {' '.join(tags)}")
-
+        tags = get_tags(content)
+        if tags:
+            with open(f, "a", encoding="utf-8") as file:
+                file.write("\n" + " ".join(f"[[{tag}]]" for tag in tags) + "\n")
+            print(f"Added tags to: {os.path.basename(f)} -> {tags}")
 
 # -----------------------------
-# 4️⃣ RUN SCRIPT
+# 5️⃣ RUN SCRIPT
 # -----------------------------
 if __name__ == "__main__":
     process_notes()
