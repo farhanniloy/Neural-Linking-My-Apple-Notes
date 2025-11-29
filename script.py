@@ -1,5 +1,4 @@
 import os
-import re
 import json
 import requests
 import nltk
@@ -17,10 +16,10 @@ except LookupError:
 # -----------------------------
 # 2️⃣ CONFIG
 # -----------------------------
-NOTES_FOLDER = "/Users/farhan/Documents/Vault/a. Raw Notes/Apple Notes/iCloud"  # <-- set your exported Apple Notes folder
+NOTES_FOLDER = "/Users/farhan/Documents/Vault/a. Raw Notes/Apple Notes/iCloud"
 LMSTUDIO_API = "http://localhost:1234/v1/chat/completions"
 MODEL_NAME = "Phi-3-mini-4k-instruct.Q4_K_M"
-MAX_TAGS = 5  # limit tags per note
+MAX_TAGS = 5
 
 # -----------------------------
 # 3️⃣ FUNCTIONS
@@ -39,19 +38,22 @@ Example JSON output:
 """
     payload = {
         "model": MODEL_NAME,
-        "messages": [{"role": "user", "content": prompt}],
+        "input": prompt,  # LMStudio expects 'input' instead of 'messages'
         "temperature": 0.3
     }
 
-    response = requests.post(LMSTUDIO_API, json=payload)
-    response.raise_for_status()
-    data = response.json()
-    text = data["choices"][0]["message"]["content"]
-
     try:
-        return json.loads(text)
+        response = requests.post(LMSTUDIO_API, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        # LMStudio 1.x usually returns 'output' as a list of strings
+        output_text = data.get("output", [""])[0]
+        return json.loads(output_text)
+    except requests.exceptions.RequestException as e:
+        print(f"API request failed: {e}")
+        return []
     except json.JSONDecodeError:
-        print("Warning: Could not parse JSON from LLM. Using fallback empty tags.")
+        print("Could not parse JSON from LLM response, skipping tags.")
         return []
 
 def find_all_md_files(root_folder):
