@@ -16,17 +16,28 @@ except LookupError:
 # -----------------------------
 # 2️⃣ CONFIG
 # -----------------------------
-NOTES_FOLDER = "/Users/farhan/Documents/Vault/a. Raw Notes/Apple Notes/iCloud"  # your exported Apple Notes folder
+NOTES_FOLDER = "/Users/farhan/Documents/Vault/a. Raw Notes/Apple Notes/iCloud"
 LMSTUDIO_API = "http://localhost:1234/v1/chat/completions"
-MODEL_NAME = "phi-3-mini-4k-instruct.gguf"  # exact model name from LMStudio
-MAX_TAGS = 5  # max tags per note
+MODEL_NAME = "phi-3-mini-4k-instruct.gguf"
+MAX_TAGS = 5
+MAX_CHUNK_TOKENS = 1500  # max tokens per chunk to avoid context overflow
 
 # -----------------------------
-# 3️⃣ FUNCTIONS
+# 3️⃣ HELPERS
 # -----------------------------
-def get_tags(note_text):
+def split_text_into_chunks(text, max_tokens=MAX_CHUNK_TOKENS):
     """
-    Sends note content to LMStudio and returns a list of tags.
+    Splits a long note into chunks of roughly max_tokens words.
+    """
+    words = text.split()
+    chunks = []
+    for i in range(0, len(words), max_tokens):
+        chunks.append(" ".join(words[i:i+max_tokens]))
+    return chunks
+
+def get_tags_from_chunk(chunk_text):
+    """
+    Sends one chunk to LMStudio and returns tags.
     """
     prompt = f"""
 You are an assistant analyzing a markdown note.
@@ -34,7 +45,7 @@ Suggest up to {MAX_TAGS} relevant tags for this note content.
 Return only a JSON array of tags.
 
 Note content:
-{note_text}
+{chunk_text}
 
 Example JSON output:
 ["Tag1", "Tag2", "Tag3"]
@@ -42,22 +53,33 @@ Example JSON output:
     payload = {
         "model": MODEL_NAME,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3
+        "temperature": 0.3,
+        "max_output_tokens": 200  # keep output small for speed
     }
 
     try:
         response = requests.post(LMSTUDIO_API, json=payload)
         response.raise_for_status()
         data = response.json()
-        # LMStudio response uses OpenAI-style chat completion
         text = data["choices"][0]["message"]["content"]
         return json.loads(text)
     except requests.exceptions.RequestException as e:
         print(f"API request failed: {e}")
         return []
     except json.JSONDecodeError:
-        print("Could not parse JSON from LLM response, skipping tags.")
+        print("Could not parse JSON from LLM response.")
         return []
+
+def get_tags(note_text):
+    """
+    Handles large notes by splitting into chunks and merging tags.
+    """
+    chunks = split_text_into_chunks(note_text)
+    all_tags = set()
+    for chunk in chunks:
+        tags = get_tags_from_chunk(chunk)
+        all_tags.update(tags)
+    return list(all_tags)[:MAX_TAGS]  # limit to MAX_TAGS
 
 def find_all_md_files(root_folder):
     """
@@ -79,6 +101,10 @@ def process_notes():
     for f in files:
         with open(f, "r", encoding="utf-8") as file:
             content = file.read()
+
+        # Skip empty notes
+        if not content.strip():
+            continue
 
         tags = get_tags(content)
         if tags:
